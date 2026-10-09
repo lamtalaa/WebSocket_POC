@@ -38,6 +38,16 @@ Read the two logs together. The app shows what URLSession reports. The terminal 
 
 A second client is served from the same port. Open [http://127.0.0.1:8765](http://127.0.0.1:8765), connect, and send. The other client receives `from #…`.
 
+## What it looks like
+
+Both clients idle, before the handshake:
+
+![Browser and Simulator before connecting](screenshots/idle.png)
+
+After both are open. The browser sent "Hi there", the app echoed it, then the app sent "Hello" and the browser received `from #3: Hello`:
+
+![Browser and Simulator exchanging frames](screenshots/messages.png)
+
 ## What to try
 
 1. Connect and find `101 Switching Protocols` in the terminal.
