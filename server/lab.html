@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebSocket Lab</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #111318;
+      --card: #1c2028;
+      --ink: #f1eee6;
+      --muted: #9ea0aa;
+      --line: rgba(255, 255, 255, 0.08);
+      --signal: #6bdb9e;
+      --sent: #7db8fa;
+      --recv: #c7a3f5;
+      --warn: #f2c261;
+      --bad: #f57a6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.45 "Iowan Old Style", Palatino, Georgia, serif;
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 28px 20px 40px;
+    }
+    h1 {
+      font-size: 28px;
+      font-weight: 600;
+      margin: 0;
+    }
+    header, .row, form {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    header { justify-content: space-between; margin-bottom: 8px; }
+    #status {
+      margin: 0;
+      font: 600 13px/1 ui-sans-serif, system-ui, sans-serif;
+      color: var(--muted);
+    }
+    #status.open { color: var(--signal); }
+    #status.wait { color: var(--warn); }
+    #status.bad { color: var(--bad); }
+    .lesson, .hint {
+      color: var(--muted);
+      font: 14px/1.45 ui-sans-serif, system-ui, sans-serif;
+    }
+    .lesson { margin: 0 0 16px; }
+    #log {
+      min-height: 280px;
+      margin: 0 0 14px;
+      padding: 14px;
+      background: var(--card);
+      border-radius: 14px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.45 ui-monospace, "SF Mono", Menlo, monospace;
+    }
+    .row { margin-bottom: 10px; flex-wrap: wrap; }
+    input {
+      flex: 1;
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: var(--ink);
+      border-radius: 12px;
+      padding: 12px 14px;
+      font: 15px/1.2 ui-sans-serif, system-ui, sans-serif;
+    }
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 10px 14px;
+      background: #272c36;
+      color: var(--ink);
+      font: 600 14px/1 ui-sans-serif, system-ui, sans-serif;
+      cursor: pointer;
+    }
+    button.primary { background: var(--signal); color: #102117; }
+    button:disabled { color: var(--muted); cursor: default; }
+    button.primary:disabled { background: #272c36; }
+    #log:empty::before {
+      content: "Frames land here after you connect.";
+      color: var(--muted);
+    }
+    .hint { margin: 14px 0 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>WebSocket Lab</h1>
+      <p id="status">Idle</p>
+    </header>
+    <p class="lesson">A second client for the same server. Leave the iOS app connected and a message typed here shows up there as <code>from #…</code>.</p>
+    <pre id="log">Open the socket to watch the handshake finish, then send a frame.</pre>
+    <div class="row">
+      <button id="connect" class="primary">Connect</button>
+      <button id="binary" disabled>Binary</button>
+      <button id="push" disabled>Server push</button>
+    </div>
+    <form id="composer">
+      <input id="text" placeholder="Type a text frame" autocomplete="off" disabled>
+      <button id="send" class="primary" disabled>Send</button>
+    </form>
+    <p class="hint">This page can send text, binary, and close. Ping is on the iOS app: URLSession exposes sendPing, and a page script does not.</p>
+  </main>
+  <script>
+    // Same socket the iOS app uses. The browser completes the HTTP upgrade
+    // inside `new WebSocket` and then delivers message payloads, already unmasked.
+    const endpoint = location.protocol.startsWith("http")
+      ? `ws://${location.host}/`
+      : "ws://127.0.0.1:8765/";
+
+    const status = document.querySelector("#status");
+    const log = document.querySelector("#log");
+    const connectBtn = document.querySelector("#connect");
+    const binaryBtn = document.querySelector("#binary");
+    const pushBtn = document.querySelector("#push");
+    const sendBtn = document.querySelector("#send");
+    const text = document.querySelector("#text");
+    const composer = document.querySelector("#composer");
+
+    let socket = null;
+    log.textContent = "";
+
+    function stamp(tag, body) {
+      const time = new Date().toISOString().slice(11, 21);
+      log.textContent += `${time}  ${tag.padEnd(5)} ${body}\n`;
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function setPhase(name, label) {
+      status.textContent = label;
+      status.className = name;
+      const open = name === "open";
+      connectBtn.textContent = open ? "Disconnect" : (name === "wait" ? "Cancel" : "Connect");
+      connectBtn.classList.toggle("primary", !open && name !== "wait");
+      binaryBtn.disabled = !open;
+      pushBtn.disabled = !open;
+      sendBtn.disabled = !open || text.value.length === 0;
+      text.disabled = !open;
+    }
+
+    function connect() {
+      socket = new WebSocket(endpoint);
+      socket.binaryType = "arraybuffer";
+      setPhase("wait", "Connecting");
+      stamp("NOTE", `opening ${endpoint}`);
+
+      socket.onopen = () => {
+        // Fires after HTTP 101. The page never sees the status line itself.
+        setPhase("open", "Open");
+        stamp("NOTE", "handshake complete — this connection stays open");
+      };
+
+      socket.onmessage = (event) => {
+        if (typeof event.data === "string") {
+          stamp("RECV", `text · ${new TextEncoder().encode(event.data).length} bytes\n${event.data}`);
+        } else {
+          const bytes = new Uint8Array(event.data);
+          const hex = [...bytes].map((b) => b.toString(16).padStart(2, "0")).join(" ");
+          stamp("RECV", `binary · ${bytes.length} bytes\n${hex}`);
+        }
+      };
+
+      socket.onerror = () => {
+        stamp("FAIL", "the browser reported a socket error. If nothing is listening, start python3 server/server.py");
+      };
+
+      socket.onclose = (event) => {
+        const clean = event.wasClean ? "clean" : "abrupt";
+        stamp("CLOSE", `${clean} code ${event.code}${event.reason ? " · " + event.reason : ""}`);
+        socket = null;
+        setPhase(event.wasClean ? "" : "bad", event.wasClean ? "Closed" : "Failed");
+      };
+    }
+
+    function disconnect() {
+      socket?.close(1000, "closed by the browser lab");
+    }
+
+    connectBtn.addEventListener("click", () => {
+      if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+        disconnect();
+      } else {
+        connect();
+      }
+    });
+
+    binaryBtn.addEventListener("click", () => {
+      const bytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+      socket?.send(bytes);
+      stamp("SENT", "binary · 4 bytes\nde ad be ef");
+    });
+
+    pushBtn.addEventListener("click", () => {
+      socket?.send("/push");
+      stamp("SENT", "text · /push");
+    });
+
+    text.addEventListener("input", () => {
+      sendBtn.disabled = text.disabled || text.value.length === 0;
+    });
+
+    composer.addEventListener("submit", (event) => {
+      event.preventDefault();
+      if (!socket || socket.readyState !== WebSocket.OPEN || text.value.length === 0) return;
+      const payload = text.value;
+      socket.send(payload);
+      stamp("SENT", `text · ${new TextEncoder().encode(payload).length} bytes\n${payload}`);
+      text.value = "";
+      sendBtn.disabled = true;
+    });
+
+    setPhase("", "Idle");
+  </script>
+</body>
+</html>
